@@ -62,6 +62,7 @@ just doit
 | `just shell` | Django シェルへのアクセス |
 | `just tunnel` | Cloudflare Tunnel でインターネットに公開 |
 | `just status` | コンテナのステータス確認 |
+| `just health` | サービスのヘルスチェック |
 | `just logs` | ログの表示 |
 | `just clean` | 未使用の Docker リソースを削除 |
 | `just info` | システム情報の表示 |
