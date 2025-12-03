@@ -54,6 +54,9 @@ install:
     echo "======================================"
     echo "  Installing uMap for Raspberry Pi"
     echo "======================================"
+    echo "  uMap version: ${UMAP_VERSION}"
+    echo "  PostGIS version: ${POSTGIS_VERSION}"
+    echo "======================================"
     echo ""
     
     # Update package lists
@@ -240,7 +243,7 @@ run: _check-docker _check-umap
     echo ""
 
 # Stop uMap
-stop: _check-umap
+stop: _check-docker _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -250,7 +253,7 @@ stop: _check-umap
     echo "✅ uMap stopped"
 
 # Restart uMap
-restart: stop
+restart: _check-docker _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -260,9 +263,13 @@ restart: stop
     echo "🔄 Restarting uMap..."
     cd "$UMAP_DIR"
     
+    # Stop first
+    docker compose down
+    
     export COMPOSE_HTTP_TIMEOUT={{COMPOSE_HTTP_TIMEOUT}}
     export DOCKER_CLIENT_TIMEOUT={{DOCKER_CLIENT_TIMEOUT}}
     
+    # Start again
     docker compose up -d
     
     echo ""
@@ -273,7 +280,7 @@ restart: stop
     echo "🌐 Access at: http://localhost:${HTTP_PORT}/"
 
 # Uninstall uMap
-uninstall:
+uninstall: _check-docker
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -289,16 +296,16 @@ uninstall:
         
         # Stop and remove containers
         echo "🛑 Stopping and removing containers..."
-        docker compose down 2>/dev/null || true
+        docker compose down -v 2>/dev/null || true
         
         cd ..
         
-        # Remove Docker volumes
+        # Remove Docker volumes (with project prefix)
         echo "🗑️  Removing Docker volumes..."
         docker volume rm \
-            umap_umap_data \
-            umap_umap_static \
-            umap_umap_db \
+            "${UMAP_DIR}_umap_data" \
+            "${UMAP_DIR}_umap_static" \
+            "${UMAP_DIR}_umap_db" \
             2>/dev/null || true
         
         # Ask about removing the directory
@@ -354,6 +361,14 @@ create-admin: _check-docker _check-umap
     echo "👤 Creating admin user..."
     cd "{{UMAP_DIR}}"
     docker compose exec app umap createsuperuser
+
+# Access Django shell
+shell: _check-docker _check-umap
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    cd "{{UMAP_DIR}}"
+    docker compose exec app umap shell
 
 # Create Cloudflare Tunnel for internet access
 tunnel: _check-umap

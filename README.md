@@ -59,6 +59,7 @@ just doit
 | `just uninstall` | uMap の完全削除 |
 | `just doit` | install と run を続けて実行 |
 | `just create-admin` | 管理者ユーザーの作成 |
+| `just shell` | Django シェルへのアクセス |
 | `just tunnel` | Cloudflare Tunnel でインターネットに公開 |
 | `just status` | コンテナのステータス確認 |
 | `just logs` | ログの表示 |
