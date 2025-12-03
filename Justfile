@@ -100,8 +100,8 @@ install:
     echo "📁 Creating uMap directory structure..."
     mkdir -p "$UMAP_DIR/docker"
     
-    # Generate random secret key
-    SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(50))')
+    # Generate random secret key (50 characters for Django)
+    SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')
     
     # Create docker-compose.yml
     echo "🔧 Creating docker-compose.yml..."
@@ -458,8 +458,8 @@ health: _check-docker _check-umap
     
     cd "$UMAP_DIR"
     
-    # Show health status
-    docker compose ps --format "table {{{{.Name}}}}\t{{{{.Status}}}}\t{{{{.Health}}}}"
+    # Show health status (using simple format to avoid brace escaping issues)
+    docker compose ps
     
     echo ""
     echo "🌐 Testing HTTP endpoint..."
