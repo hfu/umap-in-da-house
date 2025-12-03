@@ -380,7 +380,7 @@ shell: _check-docker _check-umap
     docker compose exec app umap shell
 
 # Create Cloudflare Tunnel for internet access
-tunnel: _check-umap
+tunnel: _check-docker _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -477,6 +477,14 @@ logs: _check-umap
     cd "{{UMAP_DIR}}"
     docker compose logs -f
 
+# View app logs only
+logs-app: _check-umap
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    cd "{{UMAP_DIR}}"
+    docker compose logs -f app
+
 # Clean up Docker resources
 clean:
     #!/usr/bin/env bash
@@ -524,4 +532,24 @@ info:
         echo "uMap: Installed at ./$UMAP_DIR"
     else
         echo "uMap: Not installed"
+    fi
+
+# Show version information
+version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "======================================"
+    echo "  uMap in-da-house Version Info"
+    echo "======================================"
+    echo ""
+    echo "Configured versions:"
+    echo "  uMap:    {{UMAP_VERSION}}"
+    echo "  PostGIS: {{POSTGIS_VERSION}}"
+    echo "  Port:    {{HTTP_PORT}}"
+    echo ""
+    if [ -d "{{UMAP_DIR}}" ]; then
+        cd "{{UMAP_DIR}}"
+        echo "Running versions:"
+        docker compose exec -T app umap --version 2>/dev/null || echo "  (containers not running)"
     fi
