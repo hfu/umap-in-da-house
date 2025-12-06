@@ -68,7 +68,7 @@ install:
         postgresql \
         postgresql-contrib \
         postgis \
-        postgresql-15-postgis-3 \
+        postgresql-postgis \
         nginx \
         git \
         build-essential \
