@@ -174,15 +174,18 @@ install:
     mkdir -p "${UMAP_DIR}/static"
     mkdir -p "${UMAP_DIR}/uploads"
     
-    # Run Django migrations
-    echo "🔧 Running database migrations..."
+    # Set environment variables for Django commands
     export DJANGO_SETTINGS_MODULE=umap.settings
     export UMAP_SETTINGS=/etc/umap/settings.py
-    "${VENV_DIR}/bin/python" manage.py migrate
     
-    # Collect static files
+    # Collect static files first (before migrations to avoid URL resolution issues)
     echo "📦 Collecting static files..."
-    "${VENV_DIR}/bin/python" manage.py collectstatic --noinput
+    cd "${UMAP_DIR}"
+    "${VENV_DIR}/bin/python" manage.py collectstatic --noinput --clear
+    
+    # Run Django migrations
+    echo "🔧 Running database migrations..."
+    "${VENV_DIR}/bin/python" manage.py migrate
     
     # Create systemd service
     echo "🔧 Creating systemd service..."
