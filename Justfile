@@ -93,6 +93,11 @@ install:
     
     sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
     
+    # Ensure database ownership and schema permissions (fixes permission denied during migrate)
+    echo "🔐 Ensuring database owner and schema permissions..."
+    sudo -u postgres psql -c "ALTER DATABASE ${DB_NAME} OWNER TO ${DB_USER};" || true
+    sudo -u postgres psql -d "${DB_NAME}" -c "ALTER SCHEMA public OWNER TO ${DB_USER}; GRANT ALL ON SCHEMA public TO ${DB_USER};" || true
+    
     # Enable PostGIS extension
     echo "🗺️  Enabling PostGIS extension..."
     sudo -u postgres psql -d "${DB_NAME}" -c "CREATE EXTENSION IF NOT EXISTS postgis;"
