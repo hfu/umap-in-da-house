@@ -22,6 +22,14 @@ _check-umap:
         echo "❌ uMap directory not found. Run 'just install' first."
         exit 1
     fi
+    if [ ! -d "{{VENV_DIR}}" ]; then
+        echo "❌ uMap virtual environment not found. Run 'just install' first."
+        exit 1
+    fi
+    if [ ! -f "/etc/systemd/system/umap.service" ]; then
+        echo "❌ uMap systemd service not found. Run 'just install' first."
+        exit 1
+    fi
 
 # Install all required packages and setup uMap
 install:
@@ -185,7 +193,7 @@ install:
         echo "Requires=postgresql.service"
         echo ""
         echo "[Service]"
-        echo "Type=notify"
+        echo "Type=exec"
         echo "User=$USER"
         echo "Group=$USER"
         echo "WorkingDirectory=${UMAP_DIR}"
