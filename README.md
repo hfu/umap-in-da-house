@@ -8,6 +8,13 @@ Raspberry Pi 上で [uMap](https://github.com/umap-project/umap) を簡単に立
 
 uMap は OpenStreetMap ベースのオープンソース地図作成プラットフォームで、カスタム地図の作成と共有が可能です。本プロジェクトは、Raspberry Pi 上での uMap の稼働を簡単に行えるようにし、教育環境やエッジコンピューティングでの利用を促進します。
 
+## 特徴 / Features
+
+- **ネイティブインストール**: Docker を使用せず、uMap 公式ドキュメントに従ったネイティブインストール
+- **リソース効率**: Docker のオーバーヘッドがなく、Raspberry Pi のリソースを最大限活用
+- **自動セットアップ**: `just doit` 一つで完全自動インストール
+- **systemd 統合**: systemd サービスとして管理され、自動起動に対応
+
 ## 対応環境 / Supported Environment
 
 - **OS**: Raspberry Pi OS trixie (Debian 13) 64-bit
@@ -44,9 +51,9 @@ cd umap-in-da-house
 just doit
 ```
 
-> ⚠️ **注意 / Note**: 初回インストール時に Docker グループへの追加が必要な場合、`just install` が途中で終了します。その場合は、ログアウト・ログインして `just run` を実行してください。
+セットアップが完了したら、ブラウザで http://localhost/ にアクセスしてください。
 
-セットアップが完了したら、ブラウザで http://localhost:8000/ にアクセスしてください。
+> 💡 **ネイティブインストール / Native Installation**: このプロジェクトは Docker を使用せず、Python 仮想環境と PostgreSQL/PostGIS をネイティブにインストールします。初回インストールには 10-20 分程度かかります。
 
 ## タスク一覧 / Available Tasks
 
@@ -61,11 +68,9 @@ just doit
 | `just create-admin` | 管理者ユーザーの作成 |
 | `just shell` | Django シェルへのアクセス |
 | `just tunnel` | Cloudflare Tunnel でインターネットに公開 |
-| `just status` | コンテナのステータス確認 |
-| `just health` | サービスのヘルスチェック |
-| `just logs` | 全ログの表示 |
-| `just logs-app` | アプリケーションログのみ表示 |
-| `just clean` | 未使用の Docker リソースを削除 |
+| `just status` | サービスのステータス確認 |
+| `just logs` | uMap ログの表示 |
+| `just logs-nginx` | nginx ログの表示 |
 | `just info` | システム情報の表示 |
 | `just version` | バージョン情報の表示 |
 
@@ -78,10 +83,18 @@ just install
 ```
 
 このコマンドは以下を実行します：
-1. 必要なパッケージ（docker.io, docker-compose, curl, openssl, python3）のインストール
-2. Docker サービスの有効化と起動
-3. 現在のユーザーを docker グループに追加
-4. uMap 用の docker-compose.yml と nginx.conf の生成
+1. 必要なパッケージ（Python, PostgreSQL, PostGIS, nginx, git など）のインストール
+2. PostgreSQL の起動と設定
+3. uMap 用データベースとユーザーの作成
+4. PostGIS 拡張機能の有効化
+5. uMap リポジトリのクローン
+6. Python 仮想環境の作成
+7. uMap とその依存関係のインストール
+8. Django の設定ファイル作成
+9. データベースマイグレーションの実行
+10. 静的ファイルの収集
+11. systemd サービスの作成
+12. nginx の設定
 
 ### 起動
 
@@ -90,12 +103,11 @@ just run
 ```
 
 このコマンドは以下を実行します：
-1. Docker イメージのプル
-2. Docker コンテナの起動
-3. データベースマイグレーションの実行
-4. 静的ファイルの収集
+1. systemd サービスのリロード
+2. uMap サービスの起動と有効化
+3. nginx の起動と有効化
 
-起動には Raspberry Pi 4B で 5-10 分程度かかる場合があります。
+起動には Raspberry Pi 4B で 1-2 分程度かかります。
 
 ### 管理者ユーザーの作成
 
@@ -119,20 +131,60 @@ Justfile の変数は `just --set` で上書きできます：
 
 ```bash
 # カスタムポートで起動
-just --set HTTP_PORT 3000 run
+just --set HTTP_PORT 3000 install
 
-# カスタム uMap バージョンを使用
-just --set UMAP_VERSION 3.4.0 install
+# カスタムディレクトリを使用
+just --set UMAP_DIR /var/www/umap install
 ```
 
 | 変数 | デフォルト値 | 説明 |
 |------|-------------|------|
-| `UMAP_DIR` | umap | uMap のディレクトリ名 |
-| `HTTP_PORT` | 8000 | HTTP ポート番号 |
-| `UMAP_VERSION` | 3.4.2 | uMap Docker イメージバージョン |
-| `POSTGIS_VERSION` | 14-3.4-alpine | PostGIS Docker イメージバージョン |
-| `COMPOSE_HTTP_TIMEOUT` | 300 | Docker Compose HTTP タイムアウト（秒） |
-| `DOCKER_CLIENT_TIMEOUT` | 300 | Docker クライアントタイムアウト（秒） |
+| `UMAP_DIR` | /opt/umap | uMap のインストールディレクトリ |
+| `UMAP_VERSION` | 3.4.2 | uMap バージョン |
+| `HTTP_PORT` | 8000 | 内部 HTTP ポート番号（nginx が 80 でリスンします） |
+| `VENV_DIR` | /opt/umap/venv | Python 仮想環境ディレクトリ |
+| `DB_NAME` | umap | PostgreSQL データベース名 |
+| `DB_USER` | umap | PostgreSQL ユーザー名 |
+
+## アーキテクチャ / Architecture
+
+```
+┌─────────────┐
+│   Browser   │
+└──────┬──────┘
+       │ :80
+       ▼
+┌─────────────┐
+│    nginx    │  (Reverse Proxy)
+└──────┬──────┘
+       │ :8000
+       ▼
+┌─────────────┐
+│  Gunicorn   │  (WSGI Server)
+│   + uMap    │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│ PostgreSQL  │
+│ + PostGIS   │
+└─────────────┘
+```
+
+- **nginx**: リバースプロキシとして動作し、静的ファイルを直接提供
+- **Gunicorn**: Python WSGI サーバーとして uMap アプリケーションを実行
+- **uMap**: Django ベースの地図作成アプリケーション
+- **PostgreSQL + PostGIS**: 地理空間データベース
+
+すべてのコンポーネントがネイティブに動作し、systemd で管理されます。
+
+## ネイティブインストールの利点 / Benefits of Native Installation
+
+- **低リソース使用**: Docker のオーバーヘッドがなく、メモリとCPUを節約
+- **高速起動**: コンテナの起動時間がないため、サービスがすぐに利用可能
+- **直接アクセス**: ログやファイルに直接アクセス可能
+- **公式ドキュメント準拠**: uMap の公式インストール方法に従っているため、アップデートや問題解決が容易
+- **Raspberry Pi に最適**: 限られたリソースを最大限活用
 
 ## セキュリティ / Security
 
@@ -140,20 +192,55 @@ just --set UMAP_VERSION 3.4.0 install
 
 本プロジェクトは開発・テスト目的で設計されています。本番環境で使用する場合は、以下の点に注意してください：
 
-1. **SECRET_KEY**: インストール時に自動生成されますが、漏洩した場合は再生成してください
+1. **SECRET_KEY**: インストール時に自動生成されますが、漏洩した場合は `/etc/umap/settings.py` で再生成してください
 2. **管理者パスワード**: `just create-admin` で強力なパスワードを設定してください
-3. **ファイアウォール**: 必要なポートのみを開放してください
-4. **HTTPS**: 本番環境では HTTPS を設定してください
+3. **データベースパスワード**: デフォルトではユーザー名と同じです。本番環境では変更してください
+4. **ファイアウォール**: 必要なポートのみを開放してください
+5. **HTTPS**: 本番環境では Let's Encrypt などで HTTPS を設定してください
 
 ### Cloudflare Tunnel の注意
 
 `just tunnel` で作成されるトンネルは一時的なもので、認証なしでアクセス可能です。長期運用や本番環境では、Cloudflare Zero Trust を使用してアクセス制御を設定してください。
 
+## トラブルシューティング / Troubleshooting
+
+### サービスが起動しない
+
+```bash
+# ステータス確認
+just status
+
+# ログ確認
+just logs
+```
+
+### データベース接続エラー
+
+```bash
+# PostgreSQL が起動しているか確認
+sudo systemctl status postgresql
+
+# データベースが存在するか確認
+sudo -u postgres psql -l | grep umap
+```
+
+### ポート競合
+
+デフォルトでは nginx が80番ポートでリスンします。他のサービスが使用している場合：
+
+```bash
+# 使用中のポートを確認
+sudo ss -tulpn | grep :80
+
+# 競合しているサービスを停止
+sudo systemctl stop apache2  # 例: Apache が動作している場合
+```
+
 ## 出典・参考資料 / References
 
 - **uMap**: https://github.com/umap-project/umap
 - **uMap Documentation**: https://docs.umap-project.org/
-- **uMap Docker Hub**: https://hub.docker.com/r/umap/umap
+- **uMap Installation Guide**: https://docs.umap-project.org/en/stable/install/
 - **geosight-in-da-house**: https://github.com/hfu/geosight-in-da-house
 - **just Command Runner**: https://github.com/casey/just
 - **Cloudflare Tunnel**: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/
