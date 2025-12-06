@@ -44,9 +44,7 @@ cd umap-in-da-house
 just doit
 ```
 
-> ⚠️ **注意 / Note**: 初回インストール時に Docker グループへの追加が必要な場合、`just install` が途中で終了します。その場合は、ログアウト・ログインして `just build-umap` と `just run` を実行してください。
-
-> 💡 **ARM64 専用ビルド / ARM64-specific Build**: このプロジェクトは ARM64 (Raspberry Pi) 向けに最適化されています。`just doit` は自動的に uMap イメージを ARM64 向けにビルドします。初回ビルドには 10-30 分程度かかります。
+> ⚠️ **注意 / Note**: 初回インストール時に Docker グループへの追加が必要な場合、`just install` が途中で終了します。その場合は、ログアウト・ログインして `just run` を実行してください。
 
 セットアップが完了したら、ブラウザで http://localhost:8000/ にアクセスしてください。
 
@@ -55,12 +53,11 @@ just doit
 | タスク | 説明 |
 |--------|------|
 | `just install` | 必要なパッケージのインストールと uMap のセットアップ |
-| `just build-umap` | ARM64 向け uMap Docker イメージのビルド (必須) |
 | `just run` | uMap の起動 |
 | `just stop` | uMap の停止 |
 | `just restart` | uMap の再起動 |
 | `just uninstall` | uMap の完全削除 |
-| `just doit` | install, build-umap, run を続けて実行 |
+| `just doit` | install と run を続けて実行 |
 | `just create-admin` | 管理者ユーザーの作成 |
 | `just shell` | Django シェルへのアクセス |
 | `just tunnel` | Cloudflare Tunnel でインターネットに公開 |
@@ -86,19 +83,6 @@ just install
 3. 現在のユーザーを docker グループに追加
 4. uMap 用の docker-compose.yml と nginx.conf の生成
 
-### uMap イメージのビルド (ARM64)
-
-```bash
-just build-umap
-```
-
-このコマンドは以下を実行します：
-1. uMap の公式リポジトリをクローン (指定されたバージョン)
-2. Docker buildx を使用して ARM64 向けにイメージをビルド
-3. ローカルに `umap-in-da-house/umap:3.4.2-arm64` としてタグ付け
-
-> ⚠️ **重要 / Important**: このステップは ARM64 デバイスで必須です。uMap の公式イメージは ARM64 版が提供されていないため、ローカルでビルドする必要があります。初回ビルドには Raspberry Pi 4B で 10-30 分程度かかります。
-
 ### 起動
 
 ```bash
@@ -106,11 +90,10 @@ just run
 ```
 
 このコマンドは以下を実行します：
-1. uMap イメージが存在するか確認（なければエラー）
-2. その他の Docker イメージ（Redis, PostGIS, Nginx）のプル
-3. Docker コンテナの起動
-4. データベースマイグレーションの実行
-5. 静的ファイルの収集
+1. Docker イメージのプル
+2. Docker コンテナの起動
+3. データベースマイグレーションの実行
+4. 静的ファイルの収集
 
 起動には Raspberry Pi 4B で 5-10 分程度かかる場合があります。
 
@@ -146,22 +129,10 @@ just --set UMAP_VERSION 3.4.0 install
 |------|-------------|------|
 | `UMAP_DIR` | umap | uMap のディレクトリ名 |
 | `HTTP_PORT` | 8000 | HTTP ポート番号 |
-| `UMAP_VERSION` | 3.4.2 | uMap バージョン |
-| `POSTGIS_IMAGE` | kartoza/postgis | PostGIS Docker イメージ名 |
-| `POSTGIS_TAG` | 18-3.6--v2025.11.24 | PostGIS Docker イメージタグ |
-| `UMAP_IMAGE` | umap-in-da-house/umap | uMap Docker イメージ名（ローカルビルド） |
-| `UMAP_TAG` | 3.4.2-arm64 | uMap Docker イメージタグ（ARM64） |
+| `UMAP_VERSION` | 3.4.2 | uMap Docker イメージバージョン |
+| `POSTGIS_VERSION` | 14-3.4-alpine | PostGIS Docker イメージバージョン |
 | `COMPOSE_HTTP_TIMEOUT` | 300 | Docker Compose HTTP タイムアウト（秒） |
 | `DOCKER_CLIENT_TIMEOUT` | 300 | Docker クライアントタイムアウト（秒） |
-
-## ARM64 最適化 / ARM64 Optimization
-
-このプロジェクトは ARM64 アーキテクチャ（Raspberry Pi 4B）向けに最適化されています：
-
-- **ネイティブ ARM64 サポート**: すべての Docker イメージは ARM64 ネイティブで動作し、エミュレーションによる速度低下を回避します
-- **PostGIS**: `kartoza/postgis:18-3.6--v2025.11.24` を使用（ARM64 対応の最新版）
-- **uMap**: ローカルで ARM64 向けにビルド（公式イメージは ARM64 未対応のため）
-- **プラットフォーム指定**: docker-compose.yml で `platform: linux/arm64` を明示的に指定
 
 ## セキュリティ / Security
 
