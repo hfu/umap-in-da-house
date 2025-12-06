@@ -1,42 +1,33 @@
 # uMap in-da-house Justfile
 # For Raspberry Pi OS trixie 64bit on Raspberry Pi 4B
-# Based on patterns from geosight-in-da-house
+# Native installation (no Docker) following official uMap documentation
 
 # Default variables - optimized for Raspberry Pi 4B
-UMAP_DIR := "umap"
-HTTP_PORT := "8000"
+UMAP_DIR := "/opt/umap"
 UMAP_VERSION := "3.4.2"
-POSTGIS_VERSION := "14-3.4-alpine"
-
-# Raspberry Pi optimized settings
-COMPOSE_HTTP_TIMEOUT := "300"
-DOCKER_CLIENT_TIMEOUT := "300"
+HTTP_PORT := "8000"
+VENV_DIR := UMAP_DIR + "/venv"
+DB_NAME := "umap"
+DB_USER := "umap"
 
 # Default recipe: show available commands
 default:
     @just --list
 
-# Check prerequisites
-_check-docker:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if ! command -v docker &> /dev/null; then
-        echo "❌ Docker is not installed. Run 'just install' first."
-        exit 1
-    fi
-    if ! docker info &> /dev/null; then
-        echo "❌ Docker daemon is not running or you don't have permission."
-        echo "   Try: sudo systemctl start docker"
-        echo "   Or: log out and log back in if you just added yourself to the docker group"
-        exit 1
-    fi
-
-# Check if umap directory exists
+# Check if umap is installed
 _check-umap:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ ! -d "{{UMAP_DIR}}" ]; then
         echo "❌ uMap directory not found. Run 'just install' first."
+        exit 1
+    fi
+    if [ ! -d "{{VENV_DIR}}" ]; then
+        echo "❌ uMap virtual environment not found. Run 'just install' first."
+        exit 1
+    fi
+    if [ ! -f "/etc/systemd/system/umap.service" ]; then
+        echo "❌ uMap systemd service not found. Run 'just install' first."
         exit 1
     fi
 
@@ -47,15 +38,19 @@ install:
     
     # Justfile variables
     UMAP_DIR="{{UMAP_DIR}}"
-    HTTP_PORT="{{HTTP_PORT}}"
     UMAP_VERSION="{{UMAP_VERSION}}"
-    POSTGIS_VERSION="{{POSTGIS_VERSION}}"
+    HTTP_PORT="{{HTTP_PORT}}"
+    VENV_DIR="{{VENV_DIR}}"
+    DB_NAME="{{DB_NAME}}"
+    DB_USER="{{DB_USER}}"
     
     echo "======================================"
     echo "  Installing uMap for Raspberry Pi"
+    echo "  Native Installation (no Docker)"
     echo "======================================"
     echo "  uMap version: ${UMAP_VERSION}"
-    echo "  PostGIS version: ${POSTGIS_VERSION}"
+    echo "  Installation directory: ${UMAP_DIR}"
+    echo "  HTTP port: ${HTTP_PORT}"
     echo "======================================"
     echo ""
     
@@ -63,125 +58,190 @@ install:
     echo "📦 Updating package lists..."
     sudo apt-get update
     
-    # Install required packages
+    # Install required system packages
     echo "📦 Installing required packages..."
     sudo apt-get install -y \
-        docker.io \
-        docker-compose \
+        python3 \
+        python3-pip \
+        python3-venv \
+        python3-dev \
+        postgresql \
+        postgresql-contrib \
+        postgis \
+        postgresql-15-postgis-3 \
+        nginx \
+        git \
+        build-essential \
+        libpq-dev \
+        libjpeg-dev \
+        zlib1g-dev \
         curl \
-        openssl \
-        python3
+        openssl
     
-    # Enable and start Docker
-    echo "🐳 Enabling Docker service..."
-    sudo systemctl enable docker
-    sudo systemctl start docker
+    # Enable and start PostgreSQL
+    echo "🐘 Enabling PostgreSQL service..."
+    sudo systemctl enable postgresql
+    sudo systemctl start postgresql
     
-    # Add current user to docker group if not already
-    if ! groups | grep -q docker; then
-        echo "👤 Adding user to docker group..."
-        sudo usermod -aG docker $USER
-        echo ""
-        echo "⚠️  IMPORTANT: Docker group membership added."
-        echo "   Please log out and log back in, then run:"
-        echo "   just install"
-        echo ""
-        exit 2
-    fi
+    # Create PostgreSQL database and user
+    echo "🗄️  Creating database and user..."
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}'" | grep -q 1 || \
+        sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME};"
     
-    # Verify docker works
-    if ! docker info &> /dev/null; then
-        echo "⚠️  Docker is running but you may need to log out and log back in"
-        echo "   for group permissions to take effect."
-        exit 1
-    fi
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_user WHERE usename = '${DB_USER}'" | grep -q 1 || \
+        sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_USER}';"
+    
+    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
+    
+    # Enable PostGIS extension
+    echo "🗺️  Enabling PostGIS extension..."
+    sudo -u postgres psql -d "${DB_NAME}" -c "CREATE EXTENSION IF NOT EXISTS postgis;"
     
     # Create uMap directory
-    echo "📁 Creating uMap directory structure..."
-    mkdir -p "$UMAP_DIR/docker"
+    echo "📁 Creating uMap directory..."
+    sudo mkdir -p "${UMAP_DIR}"
+    sudo chown -R $USER:$USER "${UMAP_DIR}"
     
-    # Generate random secret key (50 characters for Django)
+    # Clone uMap repository
+    echo "📦 Cloning uMap repository (version ${UMAP_VERSION})..."
+    if [ -d "${UMAP_DIR}/.git" ]; then
+        cd "${UMAP_DIR}"
+        git fetch --tags
+        git checkout "${UMAP_VERSION}"
+    else
+        git clone --depth 1 --branch "${UMAP_VERSION}" https://github.com/umap-project/umap.git "${UMAP_DIR}"
+    fi
+    
+    cd "${UMAP_DIR}"
+    
+    # Create Python virtual environment
+    echo "🐍 Creating Python virtual environment..."
+    python3 -m venv "${VENV_DIR}"
+    source "${VENV_DIR}/bin/activate"
+    
+    # Upgrade pip
+    echo "📦 Upgrading pip..."
+    pip install --upgrade pip setuptools wheel
+    
+    # Install uMap and dependencies
+    echo "📦 Installing uMap and dependencies..."
+    pip install -e .
+    pip install psycopg2-binary gunicorn
+    
+    # Generate secret key
+    echo "🔑 Generating secret key..."
     SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')
     
-    # Create docker-compose.yml
-    echo "🔧 Creating docker-compose.yml..."
+    # Create uMap settings file
+    echo "🔧 Creating uMap settings..."
+    sudo mkdir -p /etc/umap
     {
-        echo "# uMap Docker Compose configuration"
-        echo "# Generated by umap-in-da-house"
+        echo "# uMap configuration for Raspberry Pi"
+        echo "from umap.settings.base import *"
         echo ""
-        echo "services:"
-        echo "  redis:"
-        echo "    image: redis:latest"
-        echo "    healthcheck:"
-        echo "      test: [\"CMD-SHELL\", \"redis-cli ping | grep PONG\"]"
-        echo "      interval: 2s"
-        echo "      timeout: 3s"
-        echo "      retries: 5"
-        echo "    command: [\"redis-server\"]"
-        echo "    restart: unless-stopped"
+        echo "SECRET_KEY = \"${SECRET_KEY}\""
+        echo "DEBUG = False"
+        echo "ALLOWED_HOSTS = [\"*\"]"
         echo ""
-        echo "  db:"
-        echo "    image: postgis/postgis:${POSTGIS_VERSION}"
-        echo "    healthcheck:"
-        echo "      test: [\"CMD-SHELL\", \"pg_isready -U postgres\"]"
-        echo "      interval: 2s"
-        echo "      timeout: 3s"
-        echo "      retries: 5"
-        echo "    environment:"
-        echo "      - POSTGRES_HOST_AUTH_METHOD=trust"
-        echo "    volumes:"
-        echo "      - umap_db:/var/lib/postgresql/data"
-        echo "    restart: unless-stopped"
+        echo "# Database"
+        echo "DATABASES = {"
+        echo "    \"default\": {"
+        echo "        \"ENGINE\": \"django.contrib.gis.db.backends.postgis\","
+        echo "        \"NAME\": \"${DB_NAME}\","
+        echo "        \"USER\": \"${DB_USER}\","
+        echo "        \"PASSWORD\": \"${DB_USER}\","
+        echo "        \"HOST\": \"localhost\","
+        echo "        \"PORT\": \"5432\","
+        echo "    }"
+        echo "}"
         echo ""
-        echo "  app:"
-        echo "    depends_on:"
-        echo "      db:"
-        echo "        condition: service_healthy"
-        echo "      redis:"
-        echo "        condition: service_healthy"
-        echo "    image: umap/umap:${UMAP_VERSION}"
-        echo "    healthcheck:"
-        echo "      test: [\"CMD-SHELL\", \"curl -f http://localhost:8000/ || exit 1\"]"
-        echo "      interval: 10s"
-        echo "      timeout: 5s"
-        echo "      retries: 3"
-        echo "      start_period: 30s"
-        echo "    environment:"
-        echo "      - STATIC_ROOT=/srv/umap/static"
-        echo "      - MEDIA_ROOT=/srv/umap/uploads"
-        echo "      - DATABASE_URL=postgis://postgres@db/postgres"
-        echo "      - SECRET_KEY=${SECRET_KEY}"
-        echo "      - SITE_URL=http://localhost:${HTTP_PORT}/"
-        echo "      - UMAP_ALLOW_ANONYMOUS=True"
-        echo "      - DEBUG=0"
-        echo "      - REALTIME_ENABLED=1"
-        echo "      - REDIS_URL=redis://redis:6379"
-        echo "    volumes:"
-        echo "      - umap_data:/srv/umap/uploads"
-        echo "      - umap_static:/srv/umap/static"
-        echo "    restart: unless-stopped"
+        echo "# Static and media files"
+        echo "STATIC_ROOT = \"${UMAP_DIR}/static\""
+        echo "MEDIA_ROOT = \"${UMAP_DIR}/uploads\""
+        echo "STATIC_URL = \"/static/\""
+        echo "MEDIA_URL = \"/uploads/\""
         echo ""
-        echo "  proxy:"
-        echo "    image: nginx:latest"
-        echo "    ports:"
-        echo "      - \"${HTTP_PORT}:80\""
-        echo "    volumes:"
-        echo "      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro"
-        echo "      - umap_static:/static:ro"
-        echo "      - umap_data:/data:ro"
-        echo "    depends_on:"
-        echo "      - app"
-        echo "    restart: unless-stopped"
+        echo "# Site configuration"
+        echo "SITE_URL = \"http://localhost:${HTTP_PORT}\""
+        echo "SHORT_SITE_URL = \"http://localhost:${HTTP_PORT}\""
         echo ""
-        echo "volumes:"
-        echo "  umap_data:"
-        echo "  umap_static:"
-        echo "  umap_db:"
-    } > "$UMAP_DIR/docker-compose.yml"
+        echo "# Allow anonymous users"
+        echo "UMAP_ALLOW_ANONYMOUS = True"
+    } | sudo tee /etc/umap/settings.py > /dev/null
     
-    # Copy nginx.conf from templates
-    echo "🔧 Creating nginx.conf..."
-    cp templates/nginx.conf "$UMAP_DIR/docker/nginx.conf"
+    # Create directories for static and media files
+    echo "📁 Creating static and media directories..."
+    mkdir -p "${UMAP_DIR}/static"
+    mkdir -p "${UMAP_DIR}/uploads"
+    
+    # Run Django migrations
+    echo "🔧 Running database migrations..."
+    export DJANGO_SETTINGS_MODULE=umap.settings
+    export UMAP_SETTINGS=/etc/umap/settings.py
+    "${VENV_DIR}/bin/python" manage.py migrate
+    
+    # Collect static files
+    echo "📦 Collecting static files..."
+    "${VENV_DIR}/bin/python" manage.py collectstatic --noinput
+    
+    # Create systemd service
+    echo "🔧 Creating systemd service..."
+    {
+        echo "[Unit]"
+        echo "Description=uMap - OpenStreetMap based maps"
+        echo "After=network.target postgresql.service"
+        echo "Requires=postgresql.service"
+        echo ""
+        echo "[Service]"
+        echo "Type=exec"
+        echo "User=$USER"
+        echo "Group=$USER"
+        echo "WorkingDirectory=${UMAP_DIR}"
+        echo "Environment=\"DJANGO_SETTINGS_MODULE=umap.settings\""
+        echo "Environment=\"UMAP_SETTINGS=/etc/umap/settings.py\""
+        echo "ExecStart=${VENV_DIR}/bin/gunicorn umap.wsgi:application --bind 127.0.0.1:${HTTP_PORT} --workers 2 --timeout 300 --access-logfile - --error-logfile -"
+        echo "Restart=always"
+        echo "RestartSec=10"
+        echo ""
+        echo "[Install]"
+        echo "WantedBy=multi-user.target"
+    } | sudo tee /etc/systemd/system/umap.service > /dev/null
+    
+    # Configure nginx
+    echo "🔧 Configuring nginx..."
+    {
+        echo "server {"
+        echo "    listen 80;"
+        echo "    server_name _;"
+        echo "    client_max_body_size 20M;"
+        echo ""
+        echo "    location /static/ {"
+        echo "        alias ${UMAP_DIR}/static/;"
+        echo "        expires 365d;"
+        echo "        access_log off;"
+        echo "    }"
+        echo ""
+        echo "    location /uploads/ {"
+        echo "        alias ${UMAP_DIR}/uploads/;"
+        echo "        expires 30d;"
+        echo "    }"
+        echo ""
+        echo "    location / {"
+        echo "        proxy_pass http://127.0.0.1:${HTTP_PORT};"
+        echo "        proxy_set_header Host \$host;"
+        echo "        proxy_set_header X-Real-IP \$remote_addr;"
+        echo "        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
+        echo "        proxy_set_header X-Forwarded-Proto \$scheme;"
+        echo "    }"
+        echo "}"
+    } | sudo tee /etc/nginx/sites-available/umap > /dev/null
+    
+    # Enable nginx site
+    sudo ln -sf /etc/nginx/sites-available/umap /etc/nginx/sites-enabled/umap
+    sudo rm -f /etc/nginx/sites-enabled/default
+    
+    # Test nginx configuration
+    sudo nginx -t
     
     echo ""
     echo "======================================"
@@ -190,146 +250,136 @@ install:
     echo ""
     echo "Next steps:"
     echo "  1. Run 'just run' to start uMap"
-    echo "  2. Access http://localhost:${HTTP_PORT}/"
+    echo "  2. Access http://localhost/"
     echo ""
     echo "💡 Tip: Run 'just create-admin' to create an admin user"
     echo ""
 
-# Run uMap
-run: _check-docker _check-umap
+# Start uMap services
+run: _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
-    
-    UMAP_DIR="{{UMAP_DIR}}"
-    HTTP_PORT="{{HTTP_PORT}}"
     
     echo "======================================"
     echo "  Starting uMap"
     echo "======================================"
     echo ""
     
-    cd "$UMAP_DIR"
+    # Reload systemd
+    echo "🔄 Reloading systemd..."
+    sudo systemctl daemon-reload
     
-    # Set Docker timeouts for Raspberry Pi (slower I/O)
-    export COMPOSE_HTTP_TIMEOUT={{COMPOSE_HTTP_TIMEOUT}}
-    export DOCKER_CLIENT_TIMEOUT={{DOCKER_CLIENT_TIMEOUT}}
+    # Start and enable uMap service
+    echo "🚀 Starting uMap service..."
+    sudo systemctl enable umap
+    sudo systemctl start umap
     
-    # Pull images
-    echo "🐳 Pulling Docker images..."
-    docker compose pull
+    # Start and enable nginx
+    echo "🌐 Starting nginx..."
+    sudo systemctl enable nginx
+    sudo systemctl start nginx
     
-    # Start containers
-    echo "🚀 Starting Docker containers..."
-    echo "   (This may take a few minutes on first run on Raspberry Pi)"
-    echo ""
-    docker compose up -d
-    
-    echo ""
-    echo "⏳ Waiting for services to initialize..."
-    sleep 30
-    
-    # Run migrations
-    echo "🔧 Running database migrations..."
-    docker compose exec -T app umap migrate
-    
-    # Collect static files
-    echo "📦 Collecting static files..."
-    docker compose exec -T app umap collectstatic --noinput
+    # Wait for service to be ready
+    echo "⏳ Waiting for uMap to start..."
+    sleep 5
     
     echo ""
     echo "======================================"
     echo "  ✅ uMap is running!"
     echo "======================================"
     echo ""
-    echo "🌐 Access uMap at: http://localhost:${HTTP_PORT}/"
+    echo "🌐 Access uMap at: http://localhost/"
     echo ""
     echo "Useful commands:"
     echo "  just stop          - Stop uMap"
-    echo "  just status        - Show container status"
+    echo "  just status        - Show service status"
     echo "  just logs          - View logs"
     echo "  just create-admin  - Create admin user"
-    echo "  just tunnel        - Expose to internet via Cloudflare"
+    echo "  just restart       - Restart uMap"
     echo ""
 
-# Stop uMap
-stop: _check-docker _check-umap
+# Stop uMap services
+stop: _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
     
     echo "🛑 Stopping uMap..."
-    cd "{{UMAP_DIR}}"
-    docker compose down
+    sudo systemctl stop umap
+    sudo systemctl stop nginx
     echo "✅ uMap stopped"
 
 # Restart uMap
-restart: _check-docker _check-umap
+restart: _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
-    
-    UMAP_DIR="{{UMAP_DIR}}"
-    HTTP_PORT="{{HTTP_PORT}}"
     
     echo "🔄 Restarting uMap..."
-    cd "$UMAP_DIR"
+    sudo systemctl restart umap
+    sudo systemctl restart nginx
     
-    # Stop first
-    docker compose down
-    
-    export COMPOSE_HTTP_TIMEOUT={{COMPOSE_HTTP_TIMEOUT}}
-    export DOCKER_CLIENT_TIMEOUT={{DOCKER_CLIENT_TIMEOUT}}
-    
-    # Start again
-    docker compose up -d
-    
-    echo ""
     echo "⏳ Waiting for services to start..."
-    sleep 15
+    sleep 3
     echo "✅ uMap restarted"
     echo ""
-    echo "🌐 Access at: http://localhost:${HTTP_PORT}/"
+    echo "🌐 Access at: http://localhost/"
 
 # Uninstall uMap
-uninstall: _check-docker
+uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
     
     UMAP_DIR="{{UMAP_DIR}}"
+    DB_NAME="{{DB_NAME}}"
+    DB_USER="{{DB_USER}}"
     
     echo "======================================"
     echo "  Uninstalling uMap"
     echo "======================================"
     echo ""
     
-    if [ -d "$UMAP_DIR" ]; then
-        cd "$UMAP_DIR"
-        
-        # Stop and remove containers
-        echo "🛑 Stopping and removing containers..."
-        docker compose down -v 2>/dev/null || true
-        
-        cd ..
-        
-        # Remove Docker volumes (with project prefix)
-        echo "🗑️  Removing Docker volumes..."
-        docker volume rm \
-            "${UMAP_DIR}_umap_data" \
-            "${UMAP_DIR}_umap_static" \
-            "${UMAP_DIR}_umap_db" \
-            2>/dev/null || true
-        
-        # Ask about removing the directory
-        echo ""
-        read -p "Remove uMap directory? This will delete all configuration. [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            echo "🗑️  Removing uMap directory..."
-            rm -rf "$UMAP_DIR"
-            echo "✅ Directory removed"
-        else
-            echo "📁 Directory kept at: $UMAP_DIR"
-        fi
+    # Stop services
+    echo "🛑 Stopping services..."
+    sudo systemctl stop umap 2>/dev/null || true
+    sudo systemctl disable umap 2>/dev/null || true
+    
+    # Remove systemd service
+    echo "🗑️  Removing systemd service..."
+    sudo rm -f /etc/systemd/system/umap.service
+    sudo systemctl daemon-reload
+    
+    # Remove nginx configuration
+    echo "🗑️  Removing nginx configuration..."
+    sudo rm -f /etc/nginx/sites-enabled/umap
+    sudo rm -f /etc/nginx/sites-available/umap
+    sudo systemctl restart nginx 2>/dev/null || true
+    
+    # Remove settings
+    echo "🗑️  Removing settings..."
+    sudo rm -rf /etc/umap
+    
+    # Ask about removing the directory
+    echo ""
+    read -p "Remove uMap directory (${UMAP_DIR})? This will delete all data. [y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "🗑️  Removing uMap directory..."
+        sudo rm -rf "$UMAP_DIR"
+        echo "✅ Directory removed"
     else
-        echo "⚠️  uMap directory not found - nothing to uninstall"
+        echo "📁 Directory kept at: $UMAP_DIR"
+    fi
+    
+    # Ask about removing database
+    echo ""
+    read -p "Remove PostgreSQL database (${DB_NAME})? [y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "🗑️  Removing database..."
+        sudo -u postgres psql -c "DROP DATABASE IF EXISTS ${DB_NAME};" || true
+        sudo -u postgres psql -c "DROP USER IF EXISTS ${DB_USER};" || true
+        echo "✅ Database removed"
+    else
+        echo "🗄️  Database kept"
     fi
     
     echo ""
@@ -345,46 +395,45 @@ doit:
     echo "======================================"
     echo ""
     
-    # Run install first
+    # Run install
     just install
-    INSTALL_EXIT=$?
     
-    # If install exited with code 0, proceed to run
-    if [ $INSTALL_EXIT -eq 0 ]; then
-        echo ""
-        echo "✅ Installation complete, proceeding to run..."
-        just run
-    else
-        # Install exited early, likely due to docker group addition
-        echo ""
-        echo "⚠️  Installation requires re-login to apply docker group."
-        echo "   After logging back in, run: just run"
-        exit 0
-    fi
+    # Run
+    echo ""
+    echo "✅ Installation complete, starting uMap..."
+    just run
 
 # Create admin user
-create-admin: _check-docker _check-umap
+create-admin: _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
+    
+    UMAP_DIR="{{UMAP_DIR}}"
+    VENV_DIR="{{VENV_DIR}}"
     
     echo "👤 Creating admin user..."
-    cd "{{UMAP_DIR}}"
-    docker compose exec app umap createsuperuser
+    cd "${UMAP_DIR}"
+    export DJANGO_SETTINGS_MODULE=umap.settings
+    export UMAP_SETTINGS=/etc/umap/settings.py
+    "${VENV_DIR}/bin/python" manage.py createsuperuser
 
 # Access Django shell
-shell: _check-docker _check-umap
+shell: _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
     
-    cd "{{UMAP_DIR}}"
-    docker compose exec app umap shell
+    UMAP_DIR="{{UMAP_DIR}}"
+    VENV_DIR="{{VENV_DIR}}"
+    
+    cd "${UMAP_DIR}"
+    export DJANGO_SETTINGS_MODULE=umap.settings
+    export UMAP_SETTINGS=/etc/umap/settings.py
+    "${VENV_DIR}/bin/python" manage.py shell
 
 # Create Cloudflare Tunnel for internet access
-tunnel: _check-docker _check-umap
+tunnel: _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
-    
-    HTTP_PORT="{{HTTP_PORT}}"
     
     echo "======================================"
     echo "  Creating Cloudflare Tunnel"
@@ -427,46 +476,23 @@ tunnel: _check-docker _check-umap
     echo "   Press Ctrl+C to stop the tunnel."
     echo ""
     
-    cloudflared tunnel --url "http://localhost:${HTTP_PORT}"
+    cloudflared tunnel --url "http://localhost:80"
 
-# Show container status
-status: _check-docker
+# Show service status
+status:
     #!/usr/bin/env bash
     set -euo pipefail
     
     UMAP_DIR="{{UMAP_DIR}}"
     
-    echo "📊 uMap Container Status:"
+    echo "📊 uMap Service Status:"
     echo ""
     if [ -d "$UMAP_DIR" ]; then
-        cd "$UMAP_DIR"
-        docker compose ps
+        sudo systemctl status umap --no-pager || true
+        echo ""
+        sudo systemctl status nginx --no-pager || true
     else
         echo "⚠️  uMap directory not found. Run 'just install' first."
-    fi
-
-# Check health of all services
-health: _check-docker _check-umap
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    UMAP_DIR="{{UMAP_DIR}}"
-    HTTP_PORT="{{HTTP_PORT}}"
-    
-    echo "🏥 Checking uMap Health..."
-    echo ""
-    
-    cd "$UMAP_DIR"
-    
-    # Show health status (using simple format to avoid brace escaping issues)
-    docker compose ps
-    
-    echo ""
-    echo "🌐 Testing HTTP endpoint..."
-    if curl -sf "http://localhost:${HTTP_PORT}/" > /dev/null 2>&1; then
-        echo "✅ HTTP endpoint is responding at http://localhost:${HTTP_PORT}/"
-    else
-        echo "⚠️  HTTP endpoint not responding. Check logs with 'just logs'"
     fi
 
 # View logs
@@ -474,33 +500,18 @@ logs: _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
     
-    cd "{{UMAP_DIR}}"
-    docker compose logs -f
-
-# View app logs only
-logs-app: _check-umap
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    cd "{{UMAP_DIR}}"
-    docker compose logs -f app
-
-# Clean up Docker resources
-clean:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    echo "🧹 Cleaning up Docker resources..."
+    echo "📋 uMap logs (Ctrl+C to exit):"
     echo ""
+    sudo journalctl -u umap -f
+
+# View nginx logs
+logs-nginx: _check-umap
+    #!/usr/bin/env bash
+    set -euo pipefail
     
-    read -p "This will remove unused Docker resources. Continue? [y/N] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        docker system prune -f
-        echo "✅ Cleanup complete"
-    else
-        echo "Cleanup cancelled"
-    fi
+    echo "📋 Nginx logs (Ctrl+C to exit):"
+    echo ""
+    sudo tail -f /var/log/nginx/access.log /var/log/nginx/error.log
 
 # Show system information
 info:
@@ -523,13 +534,21 @@ info:
     echo "Disk:"
     df -h / | tail -1
     echo ""
-    if command -v docker &> /dev/null; then
-        echo "Docker: $(docker --version)"
+    if command -v python3 &> /dev/null; then
+        echo "Python: $(python3 --version)"
     else
-        echo "Docker: Not installed"
+        echo "Python: Not installed"
+    fi
+    if command -v psql &> /dev/null; then
+        echo "PostgreSQL: $(psql --version)"
+    else
+        echo "PostgreSQL: Not installed"
     fi
     if [ -d "$UMAP_DIR" ]; then
-        echo "uMap: Installed at ./$UMAP_DIR"
+        echo "uMap: Installed at $UMAP_DIR"
+        if [ -f "$UMAP_DIR/venv/bin/python" ]; then
+            echo "Virtual env: Yes"
+        fi
     else
         echo "uMap: Not installed"
     fi
@@ -539,17 +558,21 @@ version:
     #!/usr/bin/env bash
     set -euo pipefail
     
+    UMAP_DIR="{{UMAP_DIR}}"
+    
     echo "======================================"
     echo "  uMap in-da-house Version Info"
     echo "======================================"
     echo ""
-    echo "Configured versions:"
-    echo "  uMap:    {{UMAP_VERSION}}"
-    echo "  PostGIS: {{POSTGIS_VERSION}}"
-    echo "  Port:    {{HTTP_PORT}}"
+    echo "Configured version: {{UMAP_VERSION}}"
+    echo "Installation: Native (no Docker)"
     echo ""
-    if [ -d "{{UMAP_DIR}}" ]; then
-        cd "{{UMAP_DIR}}"
-        echo "Running versions:"
-        docker compose exec -T app umap --version 2>/dev/null || echo "  (containers not running)"
+    if [ -d "$UMAP_DIR" ]; then
+        if sudo systemctl is-active --quiet umap; then
+            echo "Service: Running"
+        else
+            echo "Service: Stopped"
+        fi
+    else
+        echo "Status: Not installed"
     fi
