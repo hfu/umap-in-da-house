@@ -5,7 +5,8 @@
 # Default variables - optimized for Raspberry Pi 4B
 UMAP_DIR := "/opt/umap"
 UMAP_VERSION := "3.4.2"
-HTTP_PORT := "8000"
+HTTP_PORT := "8100"
+SITE_URL := "http://localhost:8100"
 VENV_DIR := UMAP_DIR + "/venv"
 DB_NAME := "umap"
 DB_USER := "umap"
@@ -69,7 +70,6 @@ install:
         postgresql-contrib \
         postgis \
         postgresql-postgis \
-        nginx \
         git \
         build-essential \
         libpq-dev \
@@ -167,8 +167,8 @@ install:
         echo "MEDIA_URL = \"/uploads/\""
         echo ""
         echo "# Site configuration"
-        echo "SITE_URL = \"http://localhost:${HTTP_PORT}\""
-        echo "SHORT_SITE_URL = \"http://localhost:${HTTP_PORT}\""
+        echo "SITE_URL = \"{{SITE_URL}}\""
+        echo "SHORT_SITE_URL = \"{{SITE_URL}}\""
         echo ""
         echo "# Allow anonymous users"
         echo "UMAP_ALLOW_ANONYMOUS = True"
@@ -288,49 +288,13 @@ install:
         echo "WorkingDirectory=${UMAP_DIR}"
         echo "Environment=\"DJANGO_SETTINGS_MODULE=umap.settings\""
         echo "Environment=\"UMAP_SETTINGS=/etc/umap/settings.py\""
-        echo "ExecStart=${VENV_DIR}/bin/gunicorn umap.wsgi:application --bind 127.0.0.1:${HTTP_PORT} --workers 2 --timeout 300 --access-logfile - --error-logfile -"
+        echo "ExecStart=${VENV_DIR}/bin/gunicorn umap.wsgi:application --bind 0.0.0.0:${HTTP_PORT} --workers 2 --timeout 300 --access-logfile - --error-logfile -"
         echo "Restart=always"
         echo "RestartSec=10"
         echo ""
         echo "[Install]"
         echo "WantedBy=multi-user.target"
     } | sudo tee /etc/systemd/system/umap.service > /dev/null
-    
-    # Configure nginx
-    echo "🔧 Configuring nginx..."
-    {
-        echo "server {"
-        echo "    listen 80;"
-        echo "    server_name _;"
-        echo "    client_max_body_size 20M;"
-        echo ""
-        echo "    location /static/ {"
-        echo "        alias ${UMAP_DIR}/static/;"
-        echo "        expires 365d;"
-        echo "        access_log off;"
-        echo "    }"
-        echo ""
-        echo "    location /uploads/ {"
-        echo "        alias ${UMAP_DIR}/uploads/;"
-        echo "        expires 30d;"
-        echo "    }"
-        echo ""
-        echo "    location / {"
-        echo "        proxy_pass http://127.0.0.1:${HTTP_PORT};"
-        echo "        proxy_set_header Host \$host;"
-        echo "        proxy_set_header X-Real-IP \$remote_addr;"
-        echo "        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
-        echo "        proxy_set_header X-Forwarded-Proto \$scheme;"
-        echo "    }"
-        echo "}"
-    } | sudo tee /etc/nginx/sites-available/umap > /dev/null
-    
-    # Enable nginx site
-    sudo ln -sf /etc/nginx/sites-available/umap /etc/nginx/sites-enabled/umap
-    sudo rm -f /etc/nginx/sites-enabled/default
-    
-    # Test nginx configuration
-    sudo nginx -t
     
     # Start services
     just start
@@ -364,11 +328,6 @@ start: _check-umap
     sudo systemctl enable umap
     sudo systemctl start umap
     
-    # Start and enable nginx
-    echo "🌐 Starting nginx..."
-    sudo systemctl enable nginx
-    sudo systemctl start nginx
-    
     # Wait for service to be ready
     echo "⏳ Waiting for uMap to start..."
     sleep 5
@@ -395,7 +354,6 @@ stop: _check-umap
     
     echo "🛑 Stopping uMap..."
     sudo systemctl stop umap
-    sudo systemctl stop nginx
     echo "✅ uMap stopped"
 
 # Restart uMap
@@ -405,9 +363,8 @@ restart: _check-umap
     
     echo "🔄 Restarting uMap..."
     sudo systemctl restart umap
-    sudo systemctl restart nginx
     
-    echo "⏳ Waiting for services to start..."
+    echo "⌛ Waiting for service to start..."
     sleep 3
     echo "✅ uMap restarted"
     echo ""
@@ -436,12 +393,6 @@ uninstall:
     echo "🗑️  Removing systemd service..."
     sudo rm -f /etc/systemd/system/umap.service
     sudo systemctl daemon-reload
-    
-    # Remove nginx configuration
-    echo "🗑️  Removing nginx configuration..."
-    sudo rm -f /etc/nginx/sites-enabled/umap
-    sudo rm -f /etc/nginx/sites-available/umap
-    sudo systemctl restart nginx 2>/dev/null || true
     
     # Remove settings
     echo "🗑️  Removing settings..."
@@ -565,7 +516,7 @@ tunnel: _check-umap
     echo "   Press Ctrl+C to stop the tunnel."
     echo ""
     
-    cloudflared tunnel --url "http://localhost:80"
+    cloudflared tunnel --url "http://localhost:{{HTTP_PORT}}"
 
 # Show service status
 status:
@@ -578,8 +529,6 @@ status:
     echo ""
     if [ -d "$UMAP_DIR" ]; then
         sudo systemctl status umap --no-pager || true
-        echo ""
-        sudo systemctl status nginx --no-pager || true
     else
         echo "⚠️  uMap directory not found. Run 'just install' first."
     fi
@@ -592,15 +541,6 @@ logs: _check-umap
     echo "📋 uMap logs (Ctrl+C to exit):"
     echo ""
     sudo journalctl -u umap -f
-
-# View nginx logs
-logs-nginx: _check-umap
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    echo "📋 Nginx logs (Ctrl+C to exit):"
-    echo ""
-    sudo tail -f /var/log/nginx/access.log /var/log/nginx/error.log
 
 # Show system information
 info:

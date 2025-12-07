@@ -17,13 +17,13 @@ uMap は OpenStreetMap ベースのオープンソース地図作成プラット
 - フロントエンド: 初回にビルドが必要な場合は一回だけに集約（uMap は多くが静的ファイルで配信される）
 
 ## 運用フロー（標準化）
-- 起動/再起動: `sudo systemctl restart umap nginx`
+- 起動/再起動: `sudo systemctl restart umap`
 - 更新（標準手順）:
        1. `cd /opt/umap && git pull`
        2. `sudo -u www-data bash -lc "source /opt/umap/venv/bin/activate && python manage.py migrate --noinput"`
        3. `sudo -u www-data bash -lc "source /opt/umap/venv/bin/activate && python manage.py collectstatic --noinput"`
-       4. `sudo systemctl restart umap nginx`
-- ログ: journald に集約（`journalctl -u umap`）、Nginx のアクセスログは必要に応じてオフ推奨
+       4. `sudo systemctl restart umap`
+- ログ: journald に集約（`journalctl -u umap`）
 
 <!-- Removed: uWSGI comparison — keep stack focused on uMap runtime choices -->
 
@@ -75,7 +75,7 @@ cd umap-in-da-house
 just install
 ```
 
-セットアップが完了したら、ブラウザで http://localhost/ にアクセスしてください。
+セットアップが完了したら、ブラウザで http://hostname:8100/ にアクセスしてください。
 
 > 💡 **Note**: `just install` は自動的にサービスを起動します。再起動が必要な場合は `just restart` を使用してください。
 
@@ -95,7 +95,6 @@ just install
 | `just tunnel` | Cloudflare Tunnel でインターネットに公開 |
 | `just status` | サービスのステータス確認 |
 | `just logs` | uMap ログの表示 |
-| `just logs-nginx` | nginx ログの表示 |
 | `just info` | システム情報の表示 |
 | `just version` | バージョン情報の表示 |
 
@@ -108,7 +107,7 @@ just install
 ```
 
 このコマンドは以下を実行します：
-1. 必要なパッケージ（Python, PostgreSQL, PostGIS, nginx, git など）のインストール
+1. 必要なパッケージ（Python, PostgreSQL, PostGIS, git など）のインストール
 2. PostgreSQL の起動と設定
 3. uMap 用データベースとユーザーの作成
 4. PostGIS 拡張機能の有効化
@@ -119,7 +118,6 @@ just install
 9. データベースマイグレーションの実行
 10. 静的ファイルの収集
 11. systemd サービスの作成
-12. nginx の設定
 
 ### サービスの起動
 
@@ -130,7 +128,6 @@ just start
 このコマンドは以下を実行します：
 1. systemd サービスのリロード
 2. uMap サービスの起動と有効化
-3. nginx の起動と有効化
 
 > 💡 **Note**: `just install` は自動的にサービスを起動するため、初回インストール後にこのコマンドを実行する必要はありません。
 
@@ -174,23 +171,21 @@ just --set UMAP_DIR /var/www/umap install
 |------|-------------|------|
 | `UMAP_DIR` | /opt/umap | uMap のインストールディレクトリ |
 | `UMAP_VERSION` | 3.4.2 | uMap バージョン |
-| `HTTP_PORT` | 8000 | 内部 HTTP ポート番号（nginx が 80 でリスンします） |
+| `HTTP_PORT` | 8100 | 内部 HTTP ポート番号（gunicorn が 0.0.0.0:8100 でリスニング） |
+| `SITE_URL` | http://localhost:8100 | uMap の公開 URL（地図共有リンクに使用） |
 | `VENV_DIR` | /opt/umap/venv | Python 仮想環境ディレクトリ |
 | `DB_NAME` | umap | PostgreSQL データベース名 |
 | `DB_USER` | umap | PostgreSQL ユーザー名 |
 
 ## アーキテクチャ / Architecture
 
+### スタンドアロンモード (Standalone Mode)
+
 ```
 ┌─────────────┐
 │   Browser   │
 └──────┬──────┘
-       │ :80
-       ▼
-┌─────────────┐
-│    nginx    │  (Reverse Proxy)
-└──────┬──────┘
-       │ :8000
+       │ :8100
        ▼
 ┌─────────────┐
 │  Gunicorn   │  (WSGI Server)
@@ -204,12 +199,90 @@ just --set UMAP_DIR /var/www/umap install
 └─────────────┘
 ```
 
-- **nginx**: リバースプロキシとして動作し、静的ファイルを直接提供
-- **Gunicorn**: Python WSGI サーバーとして uMap アプリケーションを実行
+アクセス先: `http://hostname:8100`
+
+### nirokuとの共存モード (With niroku)
+
+```
+┌─────────────┐
+│   Browser   │
+└──────┬──────┘
+       │ :80
+       ▼
+┌─────────────┐
+│    Caddy    │  (Reverse Proxy from niroku)
+└──────┬──────┘
+       │ /umap -> :8100
+       ▼
+┌─────────────┐
+│  Gunicorn   │  (WSGI Server)
+│   + uMap    │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│ PostgreSQL  │
+│ + PostGIS   │
+└─────────────┘
+```
+
+アクセス先: `http://hostname/umap`
+
+- **Gunicorn**: Python WSGI サーバーとして uMap アプリケーションを実行 (0.0.0.0:8100 でリスニング)
 - **uMap**: Django ベースの地図作成アプリケーション
 - **PostgreSQL + PostGIS**: 地理空間データベース
 
 すべてのコンポーネントがネイティブに動作し、systemd で管理されます。
+
+## niroku との共存 / Integration with niroku
+
+[niroku](https://github.com/unvt/niroku) がインストールされている環境では、Caddy を使用してuMapを `/umap` パスで公開できます。
+
+### Caddyfile の設定
+
+`/opt/niroku/Caddyfile` に以下を追加:
+
+```caddyfile
+:80 {
+    # 既存の設定...
+    
+    # uMap用のリバースプロキシ
+    handle_path /umap/* {
+        uri strip_prefix /umap
+        reverse_proxy localhost:8100 {
+            header_up X-Forwarded-Proto {http.request.scheme}
+            header_up X-Forwarded-Host {http.request.host}
+            header_up X-Forwarded-Port {http.request.port}
+            header_up Host {http.request.hostport}
+        }
+    }
+}
+```
+
+### SITE_URL の変更
+
+niroku経由でアクセスする場合は、`SITE_URL` を更新:
+
+```bash
+just --set SITE_URL "http://your-hostname/umap" install
+```
+
+または、既存の設定を変更:
+
+```bash
+sudo nano /etc/umap/settings.py
+# SITE_URL と SHORT_SITE_URL を "http://your-hostname/umap" に変更
+sudo systemctl restart umap
+```
+
+### Caddy の再起動
+
+```bash
+sudo pkill -f "caddy run"
+cd /opt/niroku && sudo /usr/bin/caddy run --config ./Caddyfile &
+```
+
+これで `http://your-hostname/umap` でuMapにアクセスできます。
 
 ## ネイティブインストールの利点 / Benefits of Native Installation
 
@@ -259,14 +332,14 @@ sudo -u postgres psql -l | grep umap
 
 ### ポート競合
 
-デフォルトでは nginx が80番ポートでリスンします。他のサービスが使用している場合：
+デフォルトでは gunicorn が8100番ポートでリスニングします。他のサービスが使用している場合：
 
 ```bash
 # 使用中のポートを確認
-sudo ss -tulpn | grep :80
+sudo ss -tulpn | grep :8100
 
 # 競合しているサービスを停止
-sudo systemctl stop apache2  # 例: Apache が動作している場合
+sudo systemctl stop <service-name>
 ```
 
 ## 出典・参考資料 / References
