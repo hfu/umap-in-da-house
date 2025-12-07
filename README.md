@@ -79,7 +79,7 @@ just install
 
 > 💡 **Note**: `just install` は自動的にサービスを起動します。再起動が必要な場合は `just restart` を使用してください。
 
-> 💡 **ネイティブインストール / Native Installation**: このプロジェクトは Docker を使用せず、Python 仮想環境と PostgreSQL/PostGIS をネイティブにインストールします。初回インストールには 10-20 分程度かかります。
+> 💡 **ネイティブインストール / Native Installation**: このプロジェクトは Docker を使用せず、Python 仮想環境と PostgreSQL/PostGIS をネイティブにインストールします。初回インストールには Raspberry Pi 4B で **5～10分程度**かかります（インターネット速度とシステム構成により変動）。
 
 ## タスク一覧 / Available Tasks
 
