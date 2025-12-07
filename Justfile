@@ -297,14 +297,22 @@ install:
     } | sudo tee /etc/systemd/system/umap.service > /dev/null
     
     # Start services
-    just start
+    echo "🔄 Reloading systemd..."
+    sudo systemctl daemon-reload
+    
+    echo "🚀 Starting uMap service..."
+    sudo systemctl enable umap
+    sudo systemctl start umap
+    
+    echo "⏳ Waiting for uMap to start..."
+    sleep 5
     
     echo ""
     echo "======================================"
     echo "  ✅ Installation and startup complete!"
     echo "======================================"
     echo ""
-    echo "🌐 Access uMap at: http://localhost/"
+    echo "🌐 Access uMap at: http://localhost:{{HTTP_PORT}}/"
     echo ""
     echo "💡 Tip: Run 'just create-admin' to create an admin user"
     echo ""
