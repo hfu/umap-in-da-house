@@ -31,7 +31,7 @@ _check-umap:
         exit 1
     fi
 
-# Install all required packages and setup uMap
+# Install all required packages, setup and start uMap
 install:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -251,20 +251,21 @@ install:
     # Test nginx configuration
     sudo nginx -t
     
+    # Start services
+    just start
+    
     echo ""
     echo "======================================"
-    echo "  ✅ Installation complete!"
+    echo "  ✅ Installation and startup complete!"
     echo "======================================"
     echo ""
-    echo "Next steps:"
-    echo "  1. Run 'just run' to start uMap"
-    echo "  2. Access http://localhost/"
+    echo "🌐 Access uMap at: http://localhost/"
     echo ""
     echo "💡 Tip: Run 'just create-admin' to create an admin user"
     echo ""
 
 # Start uMap services
-run: _check-umap
+start: _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -393,37 +394,36 @@ uninstall:
     echo ""
     echo "✅ Uninstall complete"
 
-# Run install and then run (full setup)
-doit:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    echo "======================================"
-    echo "  Full uMap Setup (doit)"
-    echo "======================================"
-    echo ""
-    
-    # Run install
-    just install
-    
-    # Run
-    echo ""
-    echo "✅ Installation complete, starting uMap..."
-    just run
-
-# Create admin user
-create-admin: _check-umap
+# Create admin user (interactive or non-interactive)
+# Usage:
+#   just create-admin              (interactive)
+#   just create-admin admin admin  (non-interactive with user/pass)
+create-admin user='""' pass='""': _check-umap
     #!/usr/bin/env bash
     set -euo pipefail
     
     UMAP_DIR="{{UMAP_DIR}}"
     VENV_DIR="{{VENV_DIR}}"
     
-    echo "👤 Creating admin user..."
     cd "${UMAP_DIR}"
     export DJANGO_SETTINGS_MODULE=umap.settings
     export UMAP_SETTINGS=/etc/umap/settings.py
-    "${VENV_DIR}/bin/python" manage.py createsuperuser
+    
+    if [ -n "{{user}}" ] && [ -n "{{pass}}" ]; then
+        echo "👤 Creating non-interactive admin user '{{user}}'..."
+        (
+            echo "from django.contrib.auth import get_user_model;"
+            echo "User = get_user_model();"
+            echo "if not User.objects.filter(username='{{user}}').exists():"
+            echo "    User.objects.create_superuser('{{user}}', '{{user}}@example.com', '{{pass}}');"
+            echo "    print('ADMIN_CREATED');"
+            echo "else:"
+            echo "    print('ADMIN_EXISTS');"
+        ) | "${VENV_DIR}/bin/python" manage.py shell
+    else
+        echo "👤 Creating admin user (interactive)..."
+        "${VENV_DIR}/bin/python" manage.py createsuperuser
+    fi
 
 # Access Django shell
 shell: _check-umap

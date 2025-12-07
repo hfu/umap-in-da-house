@@ -72,10 +72,12 @@ git clone https://github.com/hfu/umap-in-da-house.git
 cd umap-in-da-house
 
 # インストールと起動を一度に実行
-just doit
+just install
 ```
 
 セットアップが完了したら、ブラウザで http://localhost/ にアクセスしてください。
+
+> 💡 **Note**: `just install` は自動的にサービスを起動します。再起動が必要な場合は `just restart` を使用してください。
 
 > 💡 **ネイティブインストール / Native Installation**: このプロジェクトは Docker を使用せず、Python 仮想環境と PostgreSQL/PostGIS をネイティブにインストールします。初回インストールには 10-20 分程度かかります。
 
@@ -83,13 +85,12 @@ just doit
 
 | タスク | 説明 |
 |--------|------|
-| `just install` | 必要なパッケージのインストールと uMap のセットアップ |
-| `just run` | uMap の起動 |
+| `just install` | 必要なパッケージのインストール、uMap のセットアップ、サービスの起動 |
+| `just start` | uMap の起動 |
 | `just stop` | uMap の停止 |
 | `just restart` | uMap の再起動 |
 | `just uninstall` | uMap の完全削除 |
-| `just doit` | install と run を続けて実行 |
-| `just create-admin` | 管理者ユーザーの作成 |
+| `just create-admin` | 管理者ユーザーの作成（対話式または非対話式） |
 | `just shell` | Django シェルへのアクセス |
 | `just tunnel` | Cloudflare Tunnel でインターネットに公開 |
 | `just status` | サービスのステータス確認 |
@@ -120,10 +121,10 @@ just install
 11. systemd サービスの作成
 12. nginx の設定
 
-### 起動
+### サービスの起動
 
 ```bash
-just run
+just start
 ```
 
 このコマンドは以下を実行します：
@@ -131,15 +132,23 @@ just run
 2. uMap サービスの起動と有効化
 3. nginx の起動と有効化
 
+> 💡 **Note**: `just install` は自動的にサービスを起動するため、初回インストール後にこのコマンドを実行する必要はありません。
+
 起動には Raspberry Pi 4B で 1-2 分程度かかります。
 
 ### 管理者ユーザーの作成
 
+**対話式（推奨）:**
 ```bash
 just create-admin
 ```
 
-Django の createsuperuser コマンドを実行して、管理者ユーザーを作成します。
+**非対話式（自動化用）:**
+```bash
+just create-admin admin admin_password
+```
+
+Django の createsuperuser コマンドを実行して、管理者ユーザーを作成します。非対話式では、第1引数がユーザー名、第2引数がパスワードになります。
 
 ### Cloudflare Tunnel による公開
 
