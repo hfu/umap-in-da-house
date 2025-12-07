@@ -8,6 +8,30 @@ Raspberry Pi 上で [uMap](https://github.com/umap-project/umap) を簡単に立
 
 uMap は OpenStreetMap ベースのオープンソース地図作成プラットフォームで、カスタム地図の作成と共有が可能です。本プロジェクトは、Raspberry Pi 上での uMap の稼働を簡単に行えるようにし、教育環境やエッジコンピューティングでの利用を促進します。
 
+## 決定事項（方針）
+- リポジトリ: `umap-in-da-house`
+- 取得元: 本家 `umap-project/umap` をクローンして利用
+- 環境変数: 簡易設定は `/etc/umap/settings.py` に一元管理（将来的に `/etc/umap/.env` を併用する想定）
+- DB設計: 既定のまま（uMap の設計を尊重）
+- HTTPS: 後回し（まずはローカルで HTTP を安定化）
+- フロントエンド: 初回にビルドが必要な場合は一回だけに集約（uMap は多くが静的ファイルで配信される）
+
+## 運用フロー（標準化）
+- 起動/再起動: `sudo systemctl restart umap nginx`
+- 更新（標準手順）:
+       1. `cd /opt/umap && git pull`
+       2. `sudo -u www-data bash -lc "source /opt/umap/venv/bin/activate && python manage.py migrate --noinput"`
+       3. `sudo -u www-data bash -lc "source /opt/umap/venv/bin/activate && python manage.py collectstatic --noinput"`
+       4. `sudo systemctl restart umap nginx`
+- ログ: journald に集約（`journalctl -u umap`）、Nginx のアクセスログは必要に応じてオフ推奨
+
+<!-- Removed: uWSGI comparison — keep stack focused on uMap runtime choices -->
+
+## 既知の注意点
+- 初回の `pip install` / `collectstatic` は時間がかかる（特に初回ビルド）
+- PostGIS は apt でインストール（Raspberry Pi OS のパッケージ名に注意）
+- データベースユーザーの権限チェックを `just install` に入れている（マイグレーション時の権限エラー対策）
+
 ## 特徴 / Features
 
 - **ネイティブインストール**: Docker を使用せず、uMap 公式ドキュメントに従ったネイティブインストール
