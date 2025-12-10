@@ -236,32 +236,96 @@ just --set UMAP_DIR /var/www/umap install
 
 ## niroku との共存 / Integration with niroku
 
-[niroku](https://github.com/unvt/niroku) がインストールされている環境では、Caddy を使用してuMapを `/umap` パスで公開できます。
+[niroku](https://github.com/unvt/niroku) がインストールされている環境では、Caddy を使用して uMap を `/umap` パスで公開できます。
 
-### Caddyfile の設定
+### アーキテクチャ（詳細）
 
-`/opt/niroku/Caddyfile` に以下を追加:
+```
+┌─────────────┐
+│   Browser   │
+└──────┬──────┘
+       │ :80
+       ▼
+┌─────────────────────────────────────┐
+│    Caddy (niroku)                   │
+│  ┌─────────────────────────────┐   │
+│  │ /umap/static/* → File Server│   │  Static files from /opt/umap/static
+│  │ /static/*      → File Server│   │  Direct static access
+│  │ /umap/*        → :8100      │   │  App requests to gunicorn
+│  └─────────────────────────────┘   │
+└──────┬──────────────────────────────┘
+       │ /umap/* (strip prefix)
+       ▼
+┌─────────────┐
+│  Gunicorn   │  (0.0.0.0:8100)
+│   + uMap    │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│ PostgreSQL  │
+│ + PostGIS   │
+└─────────────┘
+```
+
+### Caddyfile の完全な設定例
+
+`/opt/niroku/Caddyfile` の内容：
 
 ```caddyfile
 :80 {
-    # 既存の設定...
-    
-    # uMap用のリバースプロキシ
-    handle_path /umap/* {
+    # Add CORS headers to all responses
+    header Access-Control-Allow-Origin "*"
+    header Access-Control-Allow-Methods "GET, POST, OPTIONS"
+    header Access-Control-Allow-Headers "*"
+
+    # uMap static files (serve from /opt/umap, strip /umap prefix)
+    handle /umap/static/* {
+        root * /opt/umap
         uri strip_prefix /umap
+        file_server
+    }
+
+    # Also handle requests to /static/* (some assets are absolute /static/...)
+    handle /static/* {
+        root * /opt/umap/static
+        uri strip_prefix /static
+        file_server
+    }
+
+    # uMap upload files
+    handle /umap/uploads/* {
+        root * /opt/umap
+        uri strip_prefix /umap
+        file_server
+    }
+
+    # uMap application (reverse proxy) - must come before general file_server
+    handle_path /umap/* {
         reverse_proxy localhost:8100 {
             header_up X-Forwarded-Proto {http.request.scheme}
             header_up X-Forwarded-Host {http.request.host}
             header_up X-Forwarded-Port {http.request.port}
             header_up Host {http.request.hostport}
+            header_up X-Forwarded-Prefix "/umap"
         }
     }
+
+    # Finally serve niroku static data for any other requests
+    root * /opt/niroku/data
+    file_server
 }
 ```
 
+### 重要なポイント
+
+1. **静的ファイルの配信**: Caddy が直接 `/opt/umap/static/` から静的ファイルを配信します。nginx は不要です。
+2. **handle の順序**: 静的ファイルのハンドラを先に記述することで、アプリケーションより優先して処理されます。
+3. **uri strip_prefix**: `/umap` プレフィックスを削除してから処理することで、アプリケーション側は通常のパスで動作します。
+
 ### SITE_URL の変更
 
-niroku経由でアクセスする場合は、`SITE_URL` を更新:
+niroku 経由でアクセスする場合は、`SITE_URL` を更新:
 
 ```bash
 just --set SITE_URL "http://your-hostname/umap" install
@@ -278,11 +342,13 @@ sudo systemctl restart umap
 ### Caddy の再起動
 
 ```bash
-sudo pkill -f "caddy run"
-cd /opt/niroku && sudo /usr/bin/caddy run --config ./Caddyfile &
+sudo systemctl restart caddy-niroku
 ```
 
-これで `http://your-hostname/umap` でuMapにアクセスできます。
+これで以下のURLでアクセスできます：
+- `http://your-hostname/` - サービス一覧ページ
+- `http://your-hostname/umap/` - uMap アプリケーション
+- `http://your-hostname/martin/` - Martin ベクタータイルサーバー（niroku に含まれる場合）
 
 ## ネイティブインストールの利点 / Benefits of Native Installation
 
@@ -341,6 +407,26 @@ sudo ss -tulpn | grep :8100
 # 競合しているサービスを停止
 sudo systemctl stop <service-name>
 ```
+
+### 静的ファイルが読み込めない (404 エラー)
+
+niroku/Caddy 経由でアクセスしている場合、静的ファイル（CSS/JS）が 404 エラーになる場合：
+
+```bash
+# 静的ファイルが存在するか確認
+ls -la /opt/umap/static/umap/
+
+# Caddyfile で静的ファイルのハンドラが正しく設定されているか確認
+cat /opt/niroku/Caddyfile | grep -A 5 "handle /umap/static"
+
+# Caddy を再起動
+sudo systemctl restart caddy-niroku
+```
+
+**原因と解決策：**
+- gunicorn は静的ファイルを配信しません
+- Caddy で静的ファイルを直接配信する必要があります
+- 上記の「niroku との共存」セクションの Caddyfile 設定を参照してください
 
 ## 出典・参考資料 / References
 
